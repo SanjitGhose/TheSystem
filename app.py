@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 import vectorbt as vbt
 import plotly.graph_objects as go
 import warnings
@@ -80,7 +79,7 @@ else:
     ticker = tickers[selected_name]
 
 # ==========================================
-# 4. TECHNICAL ANALYSIS ENGINE
+# 4. TECHNICAL ANALYSIS ENGINE (PURE PANDAS)
 # ==========================================
 st.title(f"JARVIS :: F&O TACTICAL OVERVIEW [{ticker}]")
 
@@ -92,53 +91,45 @@ if df.empty:
     st.error("Jarvis Error: Data source offline or invalid ticker.")
     st.stop()
 
-# Indicators (Pandas-TA)
-df['EMA_20'] = ta.ema(df['Close'], length=20)
-df['EMA_50'] = ta.ema(df['Close'], length=50)
-df.ta.macd(append=True)
-df['RSI'] = ta.rsi(df['Close'], length=14)
-df.ta.bbands(append=True)
+# 1. EMAs
+df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+
+# 2. RSI (14)
+delta = df['Close'].diff()
+gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+rs = gain / loss
+df['RSI'] = 100 - (100 / (1 + rs))
+
+# 3. MACD (12, 26, 9)
+ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+df['MACD'] = ema12 - ema26
+df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+# 4. Bollinger Bands (20, 2)
+df['BB_mid'] = df['Close'].rolling(window=20).mean()
+std = df['Close'].rolling(window=20).std()
+df['BB_upper'] = df['BB_mid'] + (std * 2)
 
 df.dropna(inplace=True)
 latest = df.iloc[-1]
 current_price = latest['Close']
 
-# Dynamic Column Detection
-macd_col = [c for c in df.columns if c.startswith('MACD_')][0]
-sig_col = [c for c in df.columns if c.startswith('MACDs_')][0]
-bb_upper = [c for c in df.columns if c.startswith('BBU_')][0]
-bb_mid = [c for c in df.columns if c.startswith('BBM_')][0]
-
 # Weighted Scoring Model
 score = 0
+if latest['EMA_20'] > latest['EMA_50']: score += 30
+if latest['MACD'] > latest['MACD_signal']: score += 20
+if 40 <= latest['RSI'] <= 70: score += 20
+elif latest['RSI'] < 40: score += 10
+if latest['BB_mid'] < current_price < latest['BB_upper']: score += 15
 
-# 1. Trend (EMA 20/50 Crossover) - 30%
-if latest['EMA_20'] > latest['EMA_50']: 
-    score += 30
-
-# 2. Momentum (MACD) - 20%
-if latest[macd_col] > latest[sig_col]: 
-    score += 20
-
-# 3. Strength (RSI) - 20%
-if 40 <= latest['RSI'] <= 70: 
-    score += 20
-elif latest['RSI'] < 40: 
-    score += 10
-
-# 4. Breakout (Bollinger) - 15%
-if current_price > latest[bb_mid] and current_price < latest[bb_upper]: 
-    score += 15
-
-# 5. Valuation (Graham Intrinsic) - 15%
 if graham_number:
-    if current_price < graham_number: 
-        score += 15
+    if current_price < graham_number: score += 15
 else:
-    if latest['EMA_20'] > latest['EMA_50']: 
-        score += 10
-    if latest[macd_col] > latest[sig_col]: 
-        score += 5
+    if latest['EMA_20'] > latest['EMA_50']: score += 10
+    if latest['MACD'] > latest['MACD_signal']: score += 5
 
 # Signal & F&O Strategy Routing
 if score >= 70: signal_label = "STRONG BUY"
@@ -165,9 +156,9 @@ else:
 # ==========================================
 df['Signal_Score'] = 0
 df['Signal_Score'] = np.where(df['EMA_20'] > df['EMA_50'], df['Signal_Score'] + 30, df['Signal_Score'])
-df['Signal_Score'] = np.where(df[macd_col] > df[sig_col], df['Signal_Score'] + 20, df['Signal_Score'])
+df['Signal_Score'] = np.where(df['MACD'] > df['MACD_signal'], df['Signal_Score'] + 20, df['Signal_Score'])
 df['Signal_Score'] = np.where((df['RSI'] >= 40) & (df['RSI'] <= 70), df['Signal_Score'] + 20, df['Signal_Score'])
-df['Signal_Score'] = np.where((df['Close'] > df[bb_mid]) & (df['Close'] < df[bb_upper]), df['Signal_Score'] + 15, df['Signal_Score'])
+df['Signal_Score'] = np.where((df['Close'] > df['BB_mid']) & (df['Close'] < df['BB_upper']), df['Signal_Score'] + 15, df['Signal_Score'])
 
 entries = df['Signal_Score'] >= 70
 exits = df['Signal_Score'] <= 30
