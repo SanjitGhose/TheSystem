@@ -12,7 +12,7 @@ warnings.filterwarnings('ignore')
 # 1. PAGE CONFIG & STARK HUD STYLING
 # ==========================================
 st.set_page_config(
-    page_title="J.A.R.V.I.S. :: Tactical Market HUD",
+    page_title="J.A.R.V.I.S. :: Nifty 50 Quantitative HUD",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -73,13 +73,74 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BULLETPROOF DATA & TECHNICAL ENGINE
+# 2. COMPLETE NIFTY 50 TICKER DIRECTORY
+# ==========================================
+NIFTY_50_CATALOG = {
+    # Key Indices
+    "Nifty 50 Index": "^NSEI",
+    "Bank Nifty Index": "^NSEBANK",
+    
+    # All Nifty 50 Constituents
+    "Adani Enterprises": "ADANIENT.NS",
+    "Adani Ports & SEZ": "ADANIPORTS.NS",
+    "Apollo Hospitals": "APOLLOHOSP.NS",
+    "Asian Paints": "ASIANPAINT.NS",
+    "Axis Bank": "AXISBANK.NS",
+    "Bajaj Auto": "BAJAJ-AUTO.NS",
+    "Bajaj Finance": "BAJFINANCE.NS",
+    "Bajaj Finserv": "BAJAJFINSV.NS",
+    "Bharat Electronics (BEL)": "BEL.NS",
+    "Bharat Petroleum (BPCL)": "BPCL.NS",
+    "Bharti Airtel": "BHARTIARTL.NS",
+    "Britannia Industries": "BRITANNIA.NS",
+    "Cipla": "CIPLA.NS",
+    "Coal India": "COALINDIA.NS",
+    "Divi's Laboratories": "DIVISLAB.NS",
+    "Dr. Reddy's Laboratories": "DRREDDY.NS",
+    "Eicher Motors": "EICHERMOT.NS",
+    "Grasim Industries": "GRASIM.NS",
+    "HCL Technologies": "HCLTECH.NS",
+    "HDFC Bank": "HDFCBANK.NS",
+    "HDFC Life Insurance": "HDFCLIFE.NS",
+    "Hero MotoCorp": "HEROMOTOCO.NS",
+    "Hindalco Industries": "HINDALCO.NS",
+    "Hindustan Unilever": "HINDUNILVR.NS",
+    "ICICI Bank": "ICICIBANK.NS",
+    "IndusInd Bank": "INDUSINDBK.NS",
+    "Infosys": "INFY.NS",
+    "ITC Limited": "ITC.NS",
+    "JSW Steel": "JSWSTEEL.NS",
+    "Kotak Mahindra Bank": "KOTAKBANK.NS",
+    "Larsen & Toubro": "LT.NS",
+    "LTIMindtree": "LTIM.NS",
+    "Mahindra & Mahindra": "M&M.NS",
+    "Maruti Suzuki": "MARUTI.NS",
+    "Nestle India": "NESTLEIND.NS",
+    "NTPC Limited": "NTPC.NS",
+    "Oil & Natural Gas Corp (ONGC)": "ONGC.NS",
+    "Power Grid Corp": "POWERGRID.NS",
+    "Reliance Industries": "RELIANCE.NS",
+    "SBI Life Insurance": "SBILIFE.NS",
+    "State Bank of India": "SBIN.NS",
+    "Sun Pharmaceutical": "SUNPHARMA.NS",
+    "Tata Consumer Products": "TATACONSUM.NS",
+    "Tata Motors": "TATAMOTORS.NS",
+    "Tata Steel": "TATASTEEL.NS",
+    "Tata Consultancy Services": "TCS.NS",
+    "Tech Mahindra": "TECHM.NS",
+    "Titan Company": "TITAN.NS",
+    "Trent Limited": "TRENT.NS",
+    "UltraTech Cement": "ULTRACEMCO.NS",
+    "Wipro Limited": "WIPRO.NS"
+}
+
+# ==========================================
+# 3. TECHNICAL ENGINE & CORRECTED QUANT MATH
 # ==========================================
 DEFAULT_HORIZON = "5y"
 
 @st.cache_data(ttl=900)
 def fetch_stock_data(ticker_symbol, period=DEFAULT_HORIZON):
-    """Fetches market data with MultiIndex header flattening."""
     try:
         t = yf.Ticker(ticker_symbol)
         df = t.history(period=period, auto_adjust=True)
@@ -130,7 +191,6 @@ def fetch_vix():
     return 15.0
 
 def compute_technical_indicators(df):
-    """Computes technical indicators using pure Pandas."""
     data = df.copy()
     
     data['EMA_10'] = data['Close'].ewm(span=10, adjust=False).mean()
@@ -157,7 +217,7 @@ def compute_technical_indicators(df):
     return data.dropna()
 
 def run_backtest_simulations(data):
-    """Runs trade simulations and computes exact strategy metrics."""
+    """Calculates backtest trade simulations using standard institutional formulas."""
     df = data.copy()
     
     df['Buy_Condition'] = (df['EMA_10'] > df['EMA_20']) & (df['MACD'] > df['MACD_Signal']) & (df['RSI'] > 45)
@@ -180,53 +240,56 @@ def run_backtest_simulations(data):
 
     if trades:
         win_trades = [t for t in trades if t > 0]
+        loss_trades = [t for t in trades if t < 0]
+        
         accuracy = (len(win_trades) / len(trades)) * 100
         total_return = sum(trades)
-        avg_profit = np.mean([t for t in trades if t > 0]) if win_trades else 0.0
-        avg_loss = abs(np.mean([t for t in trades if t < 0])) if len(win_trades) < len(trades) else 1.0
-        profit_factor = avg_profit / avg_loss if avg_loss > 0 else avg_profit
+        
+        gross_profit = sum(win_trades)
+        gross_loss = abs(sum(loss_trades))
+        
+        # Institutional Profit Factor = Gross Profit / Gross Loss
+        if gross_loss > 0:
+            profit_factor = gross_profit / gross_loss
+        else:
+            profit_factor = gross_profit if gross_profit > 0 else 1.0
     else:
         accuracy, total_return, profit_factor = 0.0, 0.0, 0.0
 
     return round(accuracy, 1), round(total_return, 1), len(trades), round(profit_factor, 2)
 
-ASSET_CATALOG = {
-    "Nifty 50 Index": "^NSEI",
-    "Bank Nifty Index": "^NSEBANK",
-    "Reliance Industries": "RELIANCE.NS",
-    "Tata Consultancy Services": "TCS.NS",
-    "HDFC Bank": "HDFCBANK.NS",
-    "Infosys": "INFY.NS",
-    "ICICI Bank": "ICICIBANK.NS",
-    "Bharti Airtel": "BHARTIARTL.NS",
-    "State Bank of India": "SBIN.NS",
-    "ITC Limited": "ITC.NS"
-}
-
 # ==========================================
-# 3. HUD TOP HEADER
+# 4. HUD TOP HEADER
 # ==========================================
 st.markdown("""
 <div class="jarvis-card" style="display: flex; justify-content: space-between; align-items: center;">
     <div>
         <span class="jarvis-badge">STARK INDUSTRIES PROTOCOL</span>
-        <h1 style="margin: 5px 0 0 0; font-size: 26px;">J.A.R.V.I.S. QUANT TACTICAL HUD</h1>
+        <h1 style="margin: 5px 0 0 0; font-size: 26px;">J.A.R.V.I.S. NIFTY 50 TACTICAL HUD</h1>
     </div>
     <div style="text-align: right;">
         <span class="jarvis-badge" style="border-color: #00ffaa; color: #00ffaa;">SYSTEM ONLINE</span>
-        <p style="margin: 5px 0 0 0; font-size: 13px; color: #88c0d0;">DATAFEED: UNIFIED (5-YEAR HORIZON)</p>
+        <p style="margin: 5px 0 0 0; font-size: 13px; color: #88c0d0;">FULL CONSTITUENT DIRECTORY (52 ASSETS)</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 4. UNIFIED SCANNER & DATA CACHE
+# 5. UNIFIED SCANNER & DATA CACHE
 # ==========================================
 table_data = []
 asset_cache = {}
 
-with st.spinner("J.A.R.V.I.S. is parsing 5-year historical feeds and standardizing metrics..."):
-    for name, symbol in ASSET_CATALOG.items():
+# Filter selection for scanner performance
+selected_filter = st.sidebar.multiselect(
+    "FILTER ASSETS IN SCANNER TABLE:",
+    options=list(NIFTY_50_CATALOG.keys()),
+    default=list(NIFTY_50_CATALOG.keys())[:12] # Load top 12 by default for speed
+)
+
+with st.spinner("J.A.R.V.I.S. is compiling 5-year historical feeds and computing backtests..."):
+    for name in selected_filter:
+        symbol = NIFTY_50_CATALOG[name]
         raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
         if not raw_df.empty:
             tech_df = compute_technical_indicators(raw_df)
@@ -262,7 +325,7 @@ with st.spinner("J.A.R.V.I.S. is parsing 5-year historical feeds and standardizi
 
 scanner_df = pd.DataFrame(table_data)
 
-st.markdown("### 🛰️ MULTI-ASSET SIMULATION SCANNER")
+st.markdown("### 🛰️ NIFTY 50 MULTI-ASSET SCANNER")
 st.dataframe(
     scanner_df,
     use_container_width=True,
@@ -271,6 +334,7 @@ st.dataframe(
         "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
         "Win Accuracy (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
         "Total Return (%)": st.column_config.NumberColumn(format="%.1f%%"),
+        "Profit Factor": st.column_config.NumberColumn(format="%.2f"),
         "Tactical Score": st.column_config.NumberColumn(format="%d / 100")
     }
 )
@@ -278,21 +342,50 @@ st.dataframe(
 st.markdown('<div class="hud-line"></div>', unsafe_allow_html=True)
 
 # ==========================================
-# 5. SYNCHRONIZED GRAPHICAL HUD & DIAGNOSTICS
+# 6. SYNCHRONIZED GRAPHICAL HUD & DIAGNOSTICS
 # ==========================================
-st.markdown("### 🎯 GRAPHICAL HUD & J.A.R.V.I.S. DIAGNOSTICS")
+st.markdown("### 🎯 DETAILED HUD & J.A.R.V.I.S. DIAGNOSTICS")
 
 selected_asset_name = st.selectbox(
-    "SELECT ASSET FOR GRAPHICAL ANALYSIS & SUBCHARTS:",
-    list(ASSET_CATALOG.keys()),
+    "SELECT ANY NIFTY 50 STOCK / INDEX FOR DETAILED HUD SUBCHARTS:",
+    list(NIFTY_50_CATALOG.keys()),
     index=0
 )
 
-cached_asset = asset_cache[selected_asset_name]
-df_tech = cached_asset["tech_df"]
-m = cached_asset["metrics"]
-vix_val = fetch_vix()
+# Fetch on-the-fly if asset wasn't pre-loaded in filtered scanner
+if selected_asset_name in asset_cache:
+    cached_asset = asset_cache[selected_asset_name]
+    df_tech = cached_asset["tech_df"]
+    m = cached_asset["metrics"]
+else:
+    symbol = NIFTY_50_CATALOG[selected_asset_name]
+    raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
+    df_tech = compute_technical_indicators(raw_df)
+    accuracy, tot_ret, num_simulations, prof_factor = run_backtest_simulations(df_tech)
+    latest = df_tech.iloc[-1]
+    
+    score = 0
+    if latest['EMA_10'] > latest['EMA_50']: score += 30
+    if latest['MACD'] > latest['MACD_Signal']: score += 25
+    if 40 <= latest['RSI'] <= 70: score += 25
+    if latest['Close'] > latest['BB_Mid']: score += 20
+    
+    signal = "STRONG BUY" if score >= 75 else "BUY" if score >= 55 else "NEUTRAL" if score >= 40 else "SELL"
+    
+    m = {
+        "Asset Name": selected_asset_name,
+        "Symbol": symbol,
+        "LTP (₹)": round(latest['Close'], 2),
+        "Signal": signal,
+        "Tactical Score": score,
+        "RSI (14)": round(latest['RSI'], 1),
+        "Simulations Count": num_simulations,
+        "Win Accuracy (%)": accuracy,
+        "Total Return (%)": tot_ret,
+        "Profit Factor": prof_factor
+    }
 
+vix_val = fetch_vix()
 curr_price = m["LTP (₹)"]
 score = m["Tactical Score"]
 accuracy = m["Win Accuracy (%)"]
@@ -323,7 +416,7 @@ st.markdown(f"""
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("LTP", f"₹{curr_price:,.2f}")
 m2.metric("Win Accuracy", f"{accuracy}%", f"{trade_cnt} Trades")
-m3.metric("Total Return", f"{tot_return}%")
+m3.metric("Profit Factor", f"{profit_factor}")
 m4.metric("Tactical Score", f"{score}/100", sig_text)
 
 # Plotly Subcharts (Price + BB, MACD, RSI)
