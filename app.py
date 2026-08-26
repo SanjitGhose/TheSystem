@@ -2,207 +2,385 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import vectorbt as vbt
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import warnings
 
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. UI CONFIGURATION & JARVIS CSS
+# 1. PAGE CONFIG & STARK INDUSTRIES HUD CSS
 # ==========================================
-st.set_page_config(page_title="The System | Jarvis UI", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="J.A.R.V.I.S. :: Tactical Market HUD",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
 <style>
-    .stApp { background-color: #02060f; }
-    h1, h2, h3, h4, p, span { color: #00e5ff !important; font-family: 'Courier New', Courier, monospace; }
-    h1 { text-shadow: 0px 0px 10px #00e5ff; }
-    .stSelectbox label, .stRadio label, .stTextInput label { color: #00e5ff !important; font-family: 'Courier New', monospace; }
-    div[data-testid="stMetricValue"] { color: #00e5ff; text-shadow: 0px 0px 8px #00e5ff; font-family: 'Courier New'; }
-    div[data-testid="stMetricLabel"] { color: #88c0d0; }
-    .jarvis-panel { 
-        border: 1px solid #00e5ff; padding: 20px; border-radius: 5px; 
-        background: rgba(0,229,255,0.05); color: #e5e9f0; 
-        font-family: 'Courier New', monospace; box-shadow: 0px 0px 15px rgba(0, 229, 255, 0.2); 
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Rajdhani:wght@500;600;700&display=swap');
+
+    .stApp {
+        background-color: #040812;
+        background-image: radial-gradient(circle at 50% 10%, rgba(0, 243, 255, 0.08) 0%, transparent 70%);
+        color: #e0f7fc;
+        font-family: 'Rajdhani', sans-serif;
     }
+
+    h1, h2, h3, h4, h5 {
+        font-family: 'Orbitron', sans-serif !important;
+        color: #00f3ff !important;
+        text-shadow: 0 0 10px rgba(0, 243, 255, 0.5);
+        letter-spacing: 1.5px;
+    }
+
+    /* Glassmorphism Card Panels */
+    .jarvis-card {
+        background: rgba(8, 18, 33, 0.75);
+        border: 1px solid rgba(0, 243, 255, 0.3);
+        border-radius: 6px;
+        padding: 18px;
+        box-shadow: 0 0 20px rgba(0, 243, 255, 0.12), inset 0 0 15px rgba(0, 243, 255, 0.05);
+        backdrop-filter: blur(10px);
+        margin-bottom: 20px;
+    }
+
+    .jarvis-badge {
+        background: rgba(0, 243, 255, 0.15);
+        border: 1px solid #00f3ff;
+        color: #00f3ff;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-family: 'Orbitron', monospace;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1px;
+    }
+
+    .stMetric {
+        background: rgba(10, 25, 47, 0.6);
+        border: 1px solid rgba(0, 243, 255, 0.2);
+        padding: 10px;
+        border-radius: 5px;
+    }
+    div[data-testid="stMetricValue"] {
+        font-family: 'Orbitron', sans-serif !important;
+        color: #00f3ff !important;
+        text-shadow: 0 0 8px #00f3ff;
+    }
+
+    .hud-line {
+        height: 2px;
+        background: linear-gradient(90deg, #00f3ff, rgba(0,243,255,0.2), transparent);
+        margin: 15px 0;
+    }
+
+    /* Custom Scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #040812; }
+    ::-webkit-scrollbar-thumb { background: #00f3ff; border-radius: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA ENGINE & CACHING
+# 2. RESILIENT DATA FETCHING & CALCULATIONS
 # ==========================================
-@st.cache_data(ttl=900)
-def fetch_data(ticker, period="2y"):
-    df = yf.Ticker(ticker).history(period=period)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    if not df.empty:
-        df.index = df.index.tz_localize(None)
-    return df
+@st.cache_data(ttl=600)
+def fetch_stock_data(ticker_symbol, period="1y"):
+    """Fetches market data with multi-index cleanup and validation."""
+    try:
+        df = yf.Ticker(ticker_symbol).history(period=period)
+        if df.empty:
+            df = yf.download(ticker_symbol, period=period, progress=False)
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if not df.empty:
+            df.index = pd.to_datetime(df.index).tz_localize(None)
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=900)
 def fetch_vix():
     try:
-        vix = yf.Ticker("^INDIAVIX").history(period="1mo")
-        return vix['Close'].iloc[-1] if not vix.empty else 15.0
-    except:
-        return 15.0
-
-@st.cache_data(ttl=3600)
-def fetch_graham_metrics(ticker):
-    try:
-        info = yf.Ticker(ticker).info
-        eps = info.get('trailingEPS', 0)
-        bvps = info.get('bookValue', 0)
-        if eps and bvps and eps > 0 and bvps > 0:
-            return np.sqrt(22.5 * eps * bvps)
+        vix_df = yf.Ticker("^INDIAVIX").history(period="5d")
+        if not vix_df.empty:
+            return vix_df['Close'].iloc[-1]
     except:
         pass
-    return None
+    return 15.0
+
+def compute_technical_indicators(df):
+    """Computes technical indicators using pure Pandas."""
+    data = df.copy()
+    
+    # 1. EMAs
+    data['EMA_20'] = data['Close'].ewm(span=20, adjust=False).mean()
+    data['EMA_50'] = data['Close'].ewm(span=50, adjust=False).mean()
+    
+    # 2. RSI (14)
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    rs = gain / (loss + 1e-10)
+    data['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD (12, 26, 9)
+    ema12 = data['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = data['Close'].ewm(span=26, adjust=False).mean()
+    data['MACD'] = ema12 - ema26
+    data['MACD_Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
+    data['MACD_Hist'] = data['MACD'] - data['MACD_Signal']
+    
+    # 4. Bollinger Bands (20, 2)
+    data['BB_Mid'] = data['Close'].rolling(window=20).mean()
+    std = data['Close'].rolling(window=20).std()
+    data['BB_Upper'] = data['BB_Mid'] + (std * 2)
+    data['BB_Lower'] = data['BB_Mid'] - (std * 2)
+    
+    return data.dropna()
+
+def backtest_strategy(data):
+    """Vectorized strategy backtester with per-asset accuracy calculation."""
+    df = data.copy()
+    
+    # Entry: Bullish EMA crossover + MACD confirmation
+    df['Buy_Signal'] = (df['EMA_20'] > df['EMA_50']) & (df['MACD'] > df['MACD_Signal'])
+    # Exit: Bearish crossover
+    df['Sell_Signal'] = (df['EMA_20'] < df['EMA_50']) | (df['MACD'] < df['MACD_Signal'])
+    
+    position = 0
+    trades = []
+    entry_price = 0
+    
+    for i in range(len(df)):
+        if position == 0 and df['Buy_Signal'].iloc[i]:
+            position = 1
+            entry_price = df['Close'].iloc[i]
+        elif position == 1 and df['Sell_Signal'].iloc[i]:
+            exit_price = df['Close'].iloc[i]
+            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+            trades.append(pnl_pct)
+            position = 0
+            
+    if trades:
+        win_trades = [t for t in trades if t > 0]
+        accuracy = (len(win_trades) / len(trades)) * 100
+        total_return = sum(trades)
+    else:
+        accuracy = 0.0
+        total_return = 0.0
+        
+    return round(accuracy, 1), round(total_return, 1), len(trades)
+
+# Asset Catalog
+ASSET_CATALOG = {
+    "Nifty 50 Index": "^NSEI",
+    "Bank Nifty Index": "^NSEBANK",
+    "Reliance Industries": "RELIANCE.NS",
+    "Tata Consultancy Services": "TCS.NS",
+    "HDFC Bank": "HDFCBANK.NS",
+    "Infosys": "INFY.NS",
+    "ICICI Bank": "ICICIBANK.NS",
+    "Bharti Airtel": "BHARTIARTL.NS",
+    "State Bank of India": "SBIN.NS",
+    "ITC Limited": "ITC.NS"
+}
 
 # ==========================================
-# 3. SIDEBAR CONTROLS
+# 3. HUD TOP HEADER
 # ==========================================
-st.sidebar.markdown("### THE SYSTEM :: CONTROL PANEL")
-asset_type = st.sidebar.radio("Asset Class", ["Nifty 50 Equity", "Market Indices"])
-
-if asset_type == "Market Indices":
-    tickers = {"Nifty 50": "^NSEI", "Bank Nifty": "^NSEBANK", "Sensex": "^BSESN", "FinNifty": "^CNXFIN"}
-else:
-    tickers = {"Reliance": "RELIANCE.NS", "TCS": "TCS.NS", "HDFC Bank": "HDFCBANK.NS", "Infosys": "INFY.NS", "ITC": "ITC.NS", "Custom": "CUSTOM"}
-
-selected_name = st.sidebar.selectbox("Select Asset", list(tickers.keys()))
-if selected_name == "Custom":
-    ticker = st.sidebar.text_input("Enter Ticker (e.g. TATAMOTORS.NS):", "TATAMOTORS.NS")
-else:
-    ticker = tickers[selected_name]
-
-# ==========================================
-# 4. TECHNICAL ANALYSIS ENGINE (PURE PANDAS)
-# ==========================================
-st.title(f"JARVIS :: F&O TACTICAL OVERVIEW [{ticker}]")
-
-df = fetch_data(ticker)
-vix = fetch_vix()
-graham_number = fetch_graham_metrics(ticker) if asset_type == "Nifty 50 Equity" else None
-
-if df.empty:
-    st.error("Jarvis Error: Data source offline or invalid ticker.")
-    st.stop()
-
-# 1. EMAs
-df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
-df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
-
-# 2. RSI (14)
-delta = df['Close'].diff()
-gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-rs = gain / loss
-df['RSI'] = 100 - (100 / (1 + rs))
-
-# 3. MACD (12, 26, 9)
-ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-df['MACD'] = ema12 - ema26
-df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-
-# 4. Bollinger Bands (20, 2)
-df['BB_mid'] = df['Close'].rolling(window=20).mean()
-std = df['Close'].rolling(window=20).std()
-df['BB_upper'] = df['BB_mid'] + (std * 2)
-
-df.dropna(inplace=True)
-latest = df.iloc[-1]
-current_price = latest['Close']
-
-# Weighted Scoring Model
-score = 0
-if latest['EMA_20'] > latest['EMA_50']: score += 30
-if latest['MACD'] > latest['MACD_signal']: score += 20
-if 40 <= latest['RSI'] <= 70: score += 20
-elif latest['RSI'] < 40: score += 10
-if latest['BB_mid'] < current_price < latest['BB_upper']: score += 15
-
-if graham_number:
-    if current_price < graham_number: score += 15
-else:
-    if latest['EMA_20'] > latest['EMA_50']: score += 10
-    if latest['MACD'] > latest['MACD_signal']: score += 5
-
-# Signal & F&O Strategy Routing
-if score >= 70: signal_label = "STRONG BUY"
-elif 55 <= score < 70: signal_label = "BUY"
-elif 45 <= score < 55: signal_label = "NEUTRAL"
-elif 30 <= score < 45: signal_label = "SELL"
-else: signal_label = "STRONG SELL"
-
-if vix < 13:
-    if score >= 55: strategy = "Bull Call Spread / Long Call (Debit)"
-    elif score <= 45: strategy = "Bear Put Spread / Long Put (Debit)"
-    else: strategy = "Calendar Spread"
-elif vix <= 20:
-    if score >= 55: strategy = "Bull Put Spread (Credit)"
-    elif score <= 45: strategy = "Bear Call Spread (Credit)"
-    else: strategy = "Iron Condor (Delta Neutral)"
-else:
-    if score >= 55: strategy = "Deep OTM Bull Put Spread"
-    elif score <= 45: strategy = "Deep OTM Bear Call Spread"
-    else: strategy = "Short Straddle / Iron Butterfly (High Theta Decay)"
-
-# ==========================================
-# 5. VECTORBT BACKTESTING ENGINE
-# ==========================================
-df['Signal_Score'] = 0
-df['Signal_Score'] = np.where(df['EMA_20'] > df['EMA_50'], df['Signal_Score'] + 30, df['Signal_Score'])
-df['Signal_Score'] = np.where(df['MACD'] > df['MACD_signal'], df['Signal_Score'] + 20, df['Signal_Score'])
-df['Signal_Score'] = np.where((df['RSI'] >= 40) & (df['RSI'] <= 70), df['Signal_Score'] + 20, df['Signal_Score'])
-df['Signal_Score'] = np.where((df['Close'] > df['BB_mid']) & (df['Close'] < df['BB_upper']), df['Signal_Score'] + 15, df['Signal_Score'])
-
-entries = df['Signal_Score'] >= 70
-exits = df['Signal_Score'] <= 30
-
-try:
-    pf = vbt.Portfolio.from_signals(df['Close'], entries, exits, init_cash=100000, fees=0.001)
-    win_rate = float(pf.trades.win_rate() * 100) if pf.trades.count() > 0 else 0.0
-    total_return = float(pf.total_return() * 100)
-except Exception:
-    win_rate = 0.0
-    total_return = 0.0
-
-# ==========================================
-# 6. UI DISPLAY
-# ==========================================
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("LTP", f"₹{current_price:,.2f}")
-col2.metric("India VIX", f"{vix:.2f}")
-if graham_number: col3.metric("Graham Intrinsic", f"₹{graham_number:,.2f}")
-else: col3.metric("Graham Intrinsic", "N/A (Index)")
-col4.metric("Signal Net Score", f"{score}/100", signal_label)
-
-st.markdown("### SYSTEM COMMENTARY")
-graham_status = "Trading at a discount to intrinsic value." if graham_number and current_price < graham_number else ("Trading at a premium." if graham_number else "Macro-index detected; bypassing Graham formula.")
-
-jarvis_text = f"""
-<div class="jarvis-panel">
-    <strong>J.A.R.V.I.S DIAGNOSTIC:</strong><br><br>
-    Analysis complete for <strong>{ticker}</strong>.<br>
-    The quantitative model generated a composite score of <strong>{score}/100</strong>, triggering a <strong>{signal_label}</strong> signal.<br>
-    Valuation status: {graham_status}<br><br>
-    India VIX is sitting at <strong>{vix:.2f}</strong>. Under current implied volatility conditions, the recommended derivative structure is a <strong>{strategy}</strong>.<br>
-    VectorBT automated backtest performance across all historical cycles yields a win rate of <strong>{win_rate:.1f}%</strong> with a total return of <strong>{total_return:.1f}%</strong>.
+st.markdown("""
+<div class="jarvis-card" style="display: flex; justify-content: space-between; align-items: center;">
+    <div>
+        <span class="jarvis-badge">STARK INDUSTRIES PROTOCOL</span>
+        <h1 style="margin: 5px 0 0 0; font-size: 26px;">J.A.R.V.I.S. QUANTITATIVE TACTICAL HUD</h1>
+    </div>
+    <div style="text-align: right;">
+        <span class="jarvis-badge" style="border-color: #00ffaa; color: #00ffaa;">SYSTEM ONLINE</span>
+        <p style="margin: 5px 0 0 0; font-size: 13px; color: #88c0d0;">MARKET DATAFEED: ACTIVE</p>
+    </div>
 </div>
-"""
-st.markdown(jarvis_text, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# Charting
-st.markdown("---")
-fig = go.Figure()
-fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'))
-fig.add_trace(go.Scatter(x=df.index, y=df['EMA_20'], line=dict(color='cyan', width=1), name='EMA 20'))
-fig.add_trace(go.Scatter(x=df.index, y=df['EMA_50'], line=dict(color='magenta', width=1), name='EMA 50'))
-fig.update_layout(template='plotly_dark', title=f"{ticker} Technical Layout", height=600, margin=dict(l=0, r=0, b=0, t=40), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+# ==========================================
+# 4. MULTI-ASSET SCANNER & BACKTEST TABLE
+# ==========================================
+st.markdown("### 🛰️ MULTI-ASSET SCANNER & ACCURACY OVERVIEW")
+
+table_data = []
+
+with st.spinner("J.A.R.V.I.S. is calculating technical indicators and backtest metrics..."):
+    for name, symbol in ASSET_CATALOG.items():
+        raw_df = fetch_stock_data(symbol, period="1y")
+        if not raw_df.empty and len(raw_df) > 50:
+            tech_df = compute_technical_indicators(raw_df)
+            accuracy, tot_ret, num_trades = backtest_strategy(tech_df)
+            latest = tech_df.iloc[-1]
+            
+            # Scoring
+            score = 0
+            if latest['EMA_20'] > latest['EMA_50']: score += 30
+            if latest['MACD'] > latest['MACD_Signal']: score += 25
+            if 40 <= latest['RSI'] <= 70: score += 25
+            if latest['Close'] > latest['BB_Mid']: score += 20
+            
+            if score >= 70: signal = "STRONG BUY"
+            elif score >= 55: signal = "BUY"
+            elif score >= 40: signal = "NEUTRAL"
+            else: signal = "SELL"
+            
+            table_data.append({
+                "Asset Name": name,
+                "Symbol": symbol,
+                "LTP (₹)": round(latest['Close'], 2),
+                "Signal": signal,
+                "Score": score,
+                "RSI (14)": round(latest['RSI'], 1),
+                "Backtest Accuracy (%)": accuracy,
+                "Total Return (%)": tot_ret,
+                "Total Trades": num_trades
+            })
+
+scanner_df = pd.DataFrame(table_data)
+
+st.dataframe(
+    scanner_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+        "Backtest Accuracy (%)": st.column_config.ProgressColumn(
+            "Backtest Accuracy (%)", format="%.1f%%", min_value=0, max_value=100
+        ),
+        "Total Return (%)": st.column_config.NumberColumn(format="%.1f%%"),
+        "Score": st.column_config.NumberColumn(format="%d / 100")
+    }
+)
+
+st.markdown('<div class="hud-line"></div>', unsafe_allow_html=True)
+
+# ==========================================
+# 5. DETAILED ANALYSIS & GRAPHICAL DISPLAY
+# ==========================================
+st.markdown("### 🎯 DEEP DIVE TACTICAL ANALYSIS")
+
+selected_asset_name = st.selectbox(
+    "SELECT STOCK / INDEX FOR DETAILED HUD GRAPHICAL DISPLAY:",
+    list(ASSET_CATALOG.keys()),
+    index=0
+)
+selected_ticker = ASSET_CATALOG[selected_asset_name]
+
+# Fetch asset data
+df_selected = fetch_stock_data(selected_ticker, period="1y")
+df_tech = compute_technical_indicators(df_selected)
+accuracy, tot_return, trade_cnt = backtest_strategy(df_tech)
+vix_val = fetch_vix()
+
+latest_row = df_tech.iloc[-1]
+curr_price = latest_row['Close']
+
+# Dynamic Scoring & Option Strategy Routing
+score = 0
+if latest_row['EMA_20'] > latest_row['EMA_50']: score += 30
+if latest_row['MACD'] > latest_row['MACD_Signal']: score += 25
+if 40 <= latest_row['RSI'] <= 70: score += 25
+if latest_row['Close'] > latest_row['BB_Mid']: score += 20
+
+if score >= 70:
+    sig_text = "STRONG BUY"
+    opt_strategy = "Bull Call Spread" if vix_val < 15 else "Bull Put Spread (Credit)"
+elif score >= 55:
+    sig_text = "BUY"
+    opt_strategy = "Long Call / Call Spread"
+elif score >= 40:
+    sig_text = "NEUTRAL"
+    opt_strategy = "Iron Condor / Calendar Spread"
+else:
+    sig_text = "SELL / BEARISH"
+    opt_strategy = "Bear Put Spread" if vix_val < 15 else "Bear Call Spread (Credit)"
+
+# JARVIS Interactive Terminal Commentary
+st.markdown(f"""
+<div class="jarvis-card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <span style="font-family: 'Orbitron'; font-weight: 700; color: #00f3ff; font-size: 16px;">
+            🤖 STARK AI DIAGNOSTIC :: {selected_asset_name.upper()}
+        </span>
+        <span class="jarvis-badge">ACCURACY: {accuracy}%</span>
+    </div>
+    <div style="font-family: monospace; font-size: 14px; color: #c0edf7; line-height: 1.6;">
+        > <strong>TACTICAL SCORE:</strong> {score}/100 | <strong>ACTION:</strong> <span style="color:#00ffaa;">{sig_text}</span><br>
+        > <strong>CURRENT PRICE:</strong> ₹{curr_price:,.2f} | <strong>INDIA VIX:</strong> {vix_val:.2f}<br>
+        > <strong>RSI (14):</strong> {latest_row['RSI']:.1f} ({'OVERBOUGHT' if latest_row['RSI']>70 else 'OVERSOLD' if latest_row['RSI']<30 else 'NEUTRAL RANGE'})<br>
+        > <strong>F&O STRATEGY SUGGESTION:</strong> Deploy <strong>{opt_strategy}</strong> based on implied volatility parameters.<br>
+        > <strong>HISTORICAL BACKTEST:</strong> Achieved <strong>{accuracy}% accuracy</strong> over {trade_cnt} executed signal cycles with <strong>{tot_return}% total return</strong>.
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Metrics Grid
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("LTP", f"₹{curr_price:,.2f}")
+m2.metric("Backtest Accuracy", f"{accuracy}%")
+m3.metric("RSI (14)", f"{latest_row['RSI']:.1f}")
+m4.metric("Tactical Score", f"{score}/100", sig_text)
+
+# Plotly Interactive Multi-Subchart (Price + BB + EMA, MACD, RSI)
+fig = make_subplots(
+    rows=3, cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.04,
+    subplot_titles=(
+        f"{selected_asset_name} Price, EMAs & Bollinger Bands",
+        "MACD (Moving Average Convergence Divergence)",
+        "RSI (Relative Strength Index)"
+    ),
+    row_heights=[0.55, 0.25, 0.20]
+)
+
+# 1. Price + EMAs + Bollinger Bands
+fig.add_trace(go.Candlestick(
+    x=df_tech.index, open=df_tech['Open'], high=df_tech['High'],
+    low=df_tech['Low'], close=df_tech['Close'], name="Candlesticks"
+), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['EMA_20'], line=dict(color='#00f3ff', width=1.5), name="EMA 20"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['EMA_50'], line=dict(color='#ff00ff', width=1.5), name="EMA 50"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['BB_Upper'], line=dict(color='rgba(255, 255, 255, 0.3)', width=1, dash='dash'), name="BB Upper"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['BB_Lower'], line=dict(color='rgba(255, 255, 255, 0.3)', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(0, 243, 255, 0.03)', name="BB Lower"), row=1, col=1)
+
+# 2. MACD Subchart
+colors = np.where(df_tech['MACD_Hist'] >= 0, '#00ffaa', '#ff0055')
+fig.add_trace(go.Bar(x=df_tech.index, y=df_tech['MACD_Hist'], marker_color=colors, name="MACD Hist"), row=2, col=1)
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD'], line=dict(color='#00f3ff', width=1.5), name="MACD Line"), row=2, col=1)
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD_Signal'], line=dict(color='#ffaa00', width=1.5), name="Signal Line"), row=2, col=1)
+
+# 3. RSI Subchart
+fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['RSI'], line=dict(color='#00f3ff', width=1.5), name="RSI"), row=3, col=1)
+fig.add_hline(y=70, line_dash="dash", line_color="#ff0055", row=3, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="#00ffaa", row=3, col=1)
+
+# Layout adjustments for HUD theme
+fig.update_layout(
+    template="plotly_dark",
+    height=800,
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(4, 8, 18, 0.8)',
+    margin=dict(l=10, r=10, t=40, b=10),
+    showlegend=True,
+    xaxis_rangeslider_visible=False
+)
+
+fig.update_xaxes(showgrid=True, gridcolor='rgba(0, 243, 255, 0.1)')
+fig.update_yaxes(showgrid=True, gridcolor='rgba(0, 243, 255, 0.1)')
+
 st.plotly_chart(fig, use_container_width=True)
 
-st.markdown("<p style='text-align: center; font-size: 11px; color: #88c0d0;'>DISCLAIMER: FOR EDUCATIONAL PURPOSES ONLY. This app provides algorithmic visualizations and does not constitute financial advice.</p>", unsafe_allow_html=True)
+st.caption("⚡ J.A.R.V.I.S. QUANT SYSTEM :: FOR EDUCATIONAL & ALGORITHMIC RESEARCH PURPOSES ONLY")
