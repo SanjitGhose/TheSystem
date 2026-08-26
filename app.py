@@ -9,7 +9,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. PAGE CONFIG & STARK INDUSTRIES HUD CSS
+# 1. PAGE CONFIG & STARK HUD STYLING
 # ==========================================
 st.set_page_config(
     page_title="J.A.R.V.I.S. :: Tactical Market HUD",
@@ -29,7 +29,7 @@ st.markdown("""
         font-family: 'Rajdhani', sans-serif;
     }
 
-    h1, h2, h3, h4, h5 {
+    h1, h2, h3, h4 {
         font-family: 'Orbitron', sans-serif !important;
         color: #00f3ff !important;
         text-shadow: 0 0 10px rgba(0, 243, 255, 0.5);
@@ -73,11 +73,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BULLETPROOF DATA FETCHING & ENGINE
+# 2. BULLETPROOF DATA & TECHNICAL ENGINE
 # ==========================================
+DEFAULT_HORIZON = "5y"
+
 @st.cache_data(ttl=900)
-def fetch_stock_data(ticker_symbol, period="5y"):
-    """Fetches stock data and safely handles MultiIndex levels from yfinance."""
+def fetch_stock_data(ticker_symbol, period=DEFAULT_HORIZON):
+    """Fetches market data with MultiIndex header flattening."""
     try:
         t = yf.Ticker(ticker_symbol)
         df = t.history(period=period, auto_adjust=True)
@@ -88,7 +90,6 @@ def fetch_stock_data(ticker_symbol, period="5y"):
         if df.empty:
             return pd.DataFrame()
 
-        # Extract column names from tuple levels
         if isinstance(df.columns, pd.MultiIndex):
             new_cols = []
             for col in df.columns:
@@ -129,29 +130,25 @@ def fetch_vix():
     return 15.0
 
 def compute_technical_indicators(df):
-    """Computes technical indicators."""
+    """Computes technical indicators using pure Pandas."""
     data = df.copy()
     
-    # Fast & Slow EMAs
     data['EMA_10'] = data['Close'].ewm(span=10, adjust=False).mean()
     data['EMA_20'] = data['Close'].ewm(span=20, adjust=False).mean()
     data['EMA_50'] = data['Close'].ewm(span=50, adjust=False).mean()
     
-    # RSI (14)
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     rs = gain / (loss + 1e-10)
     data['RSI'] = 100 - (100 / (1 + rs))
     
-    # MACD (12, 26, 9)
     ema12 = data['Close'].ewm(span=12, adjust=False).mean()
     ema26 = data['Close'].ewm(span=26, adjust=False).mean()
     data['MACD'] = ema12 - ema26
     data['MACD_Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
     data['MACD_Hist'] = data['MACD'] - data['MACD_Signal']
     
-    # Bollinger Bands (20, 2)
     data['BB_Mid'] = data['Close'].rolling(window=20).mean()
     std = data['Close'].rolling(window=20).std()
     data['BB_Upper'] = data['BB_Mid'] + (std * 2)
@@ -159,11 +156,10 @@ def compute_technical_indicators(df):
     
     return data.dropna()
 
-def run_100plus_simulations(data):
-    """Simulates 100+ dynamic swing trade executions across historical cycles."""
+def run_backtest_simulations(data):
+    """Runs trade simulations and computes exact strategy metrics."""
     df = data.copy()
     
-    # Signal triggers: Short-term momentum crossovers + RSI pullbacks
     df['Buy_Condition'] = (df['EMA_10'] > df['EMA_20']) & (df['MACD'] > df['MACD_Signal']) & (df['RSI'] > 45)
     df['Sell_Condition'] = (df['EMA_10'] < df['EMA_20']) | (df['MACD'] < df['MACD_Signal']) | (df['RSI'] > 75)
     
@@ -218,27 +214,25 @@ st.markdown("""
     </div>
     <div style="text-align: right;">
         <span class="jarvis-badge" style="border-color: #00ffaa; color: #00ffaa;">SYSTEM ONLINE</span>
-        <p style="margin: 5px 0 0 0; font-size: 13px; color: #88c0d0;">DATAFEED: ACTIVE (5-YEAR HORIZON)</p>
+        <p style="margin: 5px 0 0 0; font-size: 13px; color: #88c0d0;">DATAFEED: UNIFIED (5-YEAR HORIZON)</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 4. MULTI-ASSET SCANNER TABLE
+# 4. UNIFIED SCANNER & DATA CACHE
 # ==========================================
-st.markdown("### 🛰️ MULTI-ASSET SIMULATION SCANNER")
-
 table_data = []
+asset_cache = {}
 
-with st.spinner("J.A.R.V.I.S. is parsing historical data and calculating 100+ trade simulations..."):
+with st.spinner("J.A.R.V.I.S. is parsing 5-year historical feeds and standardizing metrics..."):
     for name, symbol in ASSET_CATALOG.items():
-        raw_df = fetch_stock_data(symbol, period="5y")
+        raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
         if not raw_df.empty:
             tech_df = compute_technical_indicators(raw_df)
-            accuracy, tot_ret, num_simulations, prof_factor = run_100plus_simulations(tech_df)
+            accuracy, tot_ret, num_simulations, prof_factor = run_backtest_simulations(tech_df)
             latest = tech_df.iloc[-1]
             
-            # Score
             score = 0
             if latest['EMA_10'] > latest['EMA_50']: score += 30
             if latest['MACD'] > latest['MACD_Signal']: score += 25
@@ -247,7 +241,7 @@ with st.spinner("J.A.R.V.I.S. is parsing historical data and calculating 100+ tr
             
             signal = "STRONG BUY" if score >= 75 else "BUY" if score >= 55 else "NEUTRAL" if score >= 40 else "SELL"
             
-            table_data.append({
+            metrics_dict = {
                 "Asset Name": name,
                 "Symbol": symbol,
                 "LTP (₹)": round(latest['Close'], 2),
@@ -258,10 +252,17 @@ with st.spinner("J.A.R.V.I.S. is parsing historical data and calculating 100+ tr
                 "Win Accuracy (%)": accuracy,
                 "Total Return (%)": tot_ret,
                 "Profit Factor": prof_factor
-            })
+            }
+            
+            table_data.append(metrics_dict)
+            asset_cache[name] = {
+                "tech_df": tech_df,
+                "metrics": metrics_dict
+            }
 
 scanner_df = pd.DataFrame(table_data)
 
+st.markdown("### 🛰️ MULTI-ASSET SIMULATION SCANNER")
 st.dataframe(
     scanner_df,
     use_container_width=True,
@@ -277,7 +278,7 @@ st.dataframe(
 st.markdown('<div class="hud-line"></div>', unsafe_allow_html=True)
 
 # ==========================================
-# 5. DETAILED ANALYSIS & GRAPHICAL DISPLAY
+# 5. SYNCHRONIZED GRAPHICAL HUD & DIAGNOSTICS
 # ==========================================
 st.markdown("### 🎯 GRAPHICAL HUD & J.A.R.V.I.S. DIAGNOSTICS")
 
@@ -286,31 +287,22 @@ selected_asset_name = st.selectbox(
     list(ASSET_CATALOG.keys()),
     index=0
 )
-selected_ticker = ASSET_CATALOG[selected_asset_name]
 
-df_selected = fetch_stock_data(selected_ticker, period="2y")
-if df_selected.empty:
-    st.error(f"Jarvis Alert: Data feed for {selected_asset_name} is unavailable.")
-    st.stop()
-
-df_tech = compute_technical_indicators(df_selected)
-accuracy, tot_return, trade_cnt, profit_factor = run_100plus_simulations(df_tech)
+cached_asset = asset_cache[selected_asset_name]
+df_tech = cached_asset["tech_df"]
+m = cached_asset["metrics"]
 vix_val = fetch_vix()
 
-latest_row = df_tech.iloc[-1]
-curr_price = latest_row['Close']
+curr_price = m["LTP (₹)"]
+score = m["Tactical Score"]
+accuracy = m["Win Accuracy (%)"]
+trade_cnt = m["Simulations Count"]
+tot_return = m["Total Return (%)"]
+profit_factor = m["Profit Factor"]
+sig_text = m["Signal"]
 
-# Score calculation
-score = 0
-if latest_row['EMA_10'] > latest_row['EMA_50']: score += 30
-if latest_row['MACD'] > latest_row['MACD_Signal']: score += 25
-if 40 <= latest_row['RSI'] <= 70: score += 25
-if latest_row['Close'] > latest_row['BB_Mid']: score += 20
-
-sig_text = "STRONG BUY" if score >= 75 else "BUY" if score >= 55 else "NEUTRAL" if score >= 40 else "BEARISH / SELL"
 opt_strategy = "Bull Call Spread" if (score >= 55 and vix_val < 16) else "Bull Put Spread (Credit)" if score >= 55 else "Iron Condor" if score >= 40 else "Bear Put Spread"
 
-# JARVIS Interactive Terminal Commentary
 st.markdown(f"""
 <div class="jarvis-card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -321,21 +313,20 @@ st.markdown(f"""
     </div>
     <div style="font-family: monospace; font-size: 14px; color: #c0edf7; line-height: 1.7;">
         > <strong>TACTICAL EVALUATION:</strong> Composite Score of <strong>{score}/100</strong> triggering a <strong>{sig_text}</strong> state.<br>
-        > <strong>LTP:</strong> ₹{curr_price:,.2f} | <strong>INDIA VIX:</strong> {vix_val:.2f} | <strong>RSI (14):</strong> {latest_row['RSI']:.1f}<br>
+        > <strong>LTP:</strong> ₹{curr_price:,.2f} | <strong>INDIA VIX:</strong> {vix_val:.2f} | <strong>RSI (14):</strong> {m['RSI (14)']}<br>
         > <strong>RECOMMENDED DERIVATIVE STRUCTURE:</strong> Deploy a <strong>{opt_strategy}</strong>.<br>
         > <strong>SIMULATION METRICS:</strong> Analyzed <strong>{trade_cnt} historical trade executions</strong>. Strategy generated <strong>{accuracy}% Win Accuracy</strong>, a <strong>{profit_factor} Profit Factor</strong>, and <strong>{tot_return}% Net Return</strong>.
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Metrics Grid
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("LTP", f"₹{curr_price:,.2f}")
 m2.metric("Win Accuracy", f"{accuracy}%", f"{trade_cnt} Trades")
 m3.metric("Total Return", f"{tot_return}%")
 m4.metric("Tactical Score", f"{score}/100", sig_text)
 
-# Plotly Interactive Multi-Subchart
+# Plotly Subcharts (Price + BB, MACD, RSI)
 fig = make_subplots(
     rows=3, cols=1,
     shared_xaxes=True,
@@ -348,7 +339,6 @@ fig = make_subplots(
     row_heights=[0.55, 0.25, 0.20]
 )
 
-# 1. Price + BB + EMAs
 fig.add_trace(go.Candlestick(
     x=df_tech.index, open=df_tech['Open'], high=df_tech['High'],
     low=df_tech['Low'], close=df_tech['Close'], name="Price"
@@ -359,13 +349,11 @@ fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['EMA_50'], line=dict(color='
 fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['BB_Upper'], line=dict(color='rgba(0, 243, 255, 0.4)', width=1, dash='dash'), name="BB Upper"), row=1, col=1)
 fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['BB_Lower'], line=dict(color='rgba(0, 243, 255, 0.4)', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(0, 243, 255, 0.04)', name="BB Lower"), row=1, col=1)
 
-# 2. MACD Subchart
 colors = np.where(df_tech['MACD_Hist'] >= 0, '#00ffaa', '#ff0055')
 fig.add_trace(go.Bar(x=df_tech.index, y=df_tech['MACD_Hist'], marker_color=colors, name="MACD Hist"), row=2, col=1)
 fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD'], line=dict(color='#00f3ff', width=1.5), name="MACD Line"), row=2, col=1)
 fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD_Signal'], line=dict(color='#ffaa00', width=1.5), name="Signal Line"), row=2, col=1)
 
-# 3. RSI Subchart
 fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['RSI'], line=dict(color='#00f3ff', width=1.5), name="RSI"), row=3, col=1)
 fig.add_hline(y=70, line_dash="dash", line_color="#ff0055", row=3, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="#00ffaa", row=3, col=1)
