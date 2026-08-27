@@ -76,11 +76,8 @@ st.markdown("""
 # 2. COMPLETE NIFTY 50 TICKER DIRECTORY
 # ==========================================
 NIFTY_50_CATALOG = {
-    # Key Indices
     "Nifty 50 Index": "^NSEI",
     "Bank Nifty Index": "^NSEBANK",
-    
-    # All Nifty 50 Constituents
     "Adani Enterprises": "ADANIENT.NS",
     "Adani Ports & SEZ": "ADANIPORTS.NS",
     "Apollo Hospitals": "APOLLOHOSP.NS",
@@ -135,7 +132,7 @@ NIFTY_50_CATALOG = {
 }
 
 # ==========================================
-# 3. TECHNICAL ENGINE & CORRECTED QUANT MATH
+# 3. FORTIFIED DATA FETCH & TECHNICALS
 # ==========================================
 DEFAULT_HORIZON = "5y"
 
@@ -151,17 +148,13 @@ def fetch_stock_data(ticker_symbol, period=DEFAULT_HORIZON):
         if df.empty:
             return pd.DataFrame()
 
+        # Handle MultiIndex columns output by modern yfinance
         if isinstance(df.columns, pd.MultiIndex):
-            new_cols = []
+            flattened_cols = []
             for col in df.columns:
-                matched_name = None
-                for item in col:
-                    item_str = str(item).title()
-                    if item_str in ['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']:
-                        matched_name = item_str
-                        break
-                new_cols.append(matched_name if matched_name else str(col[0]))
-            df.columns = new_cols
+                name = [str(item).title() for item in col if str(item).title() in ['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']]
+                flattened_cols.append(name[0] if name else str(col[0]).title())
+            df.columns = flattened_cols
         else:
             df.columns = [str(c).title() for c in df.columns]
 
@@ -191,6 +184,10 @@ def fetch_vix():
     return 15.0
 
 def compute_technical_indicators(df):
+    """Computes technical indicators with defensive column validation."""
+    if df.empty or 'Close' not in df.columns:
+        return pd.DataFrame()
+
     data = df.copy()
     
     data['EMA_10'] = data['Close'].ewm(span=10, adjust=False).mean()
@@ -218,6 +215,9 @@ def compute_technical_indicators(df):
 
 def run_backtest_simulations(data):
     """Calculates backtest trade simulations using standard institutional formulas."""
+    if data.empty:
+        return 0.0, 0.0, 0, 0.0
+        
     df = data.copy()
     
     df['Buy_Condition'] = (df['EMA_10'] > df['EMA_20']) & (df['MACD'] > df['MACD_Signal']) & (df['RSI'] > 45)
@@ -248,7 +248,6 @@ def run_backtest_simulations(data):
         gross_profit = sum(win_trades)
         gross_loss = abs(sum(loss_trades))
         
-        # Institutional Profit Factor = Gross Profit / Gross Loss
         if gross_loss > 0:
             profit_factor = gross_profit / gross_loss
         else:
@@ -291,53 +290,59 @@ with st.spinner("J.A.R.V.I.S. is compiling 5-year historical feeds and computing
     for name in selected_filter:
         symbol = NIFTY_50_CATALOG[name]
         raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
+        
         if not raw_df.empty:
             tech_df = compute_technical_indicators(raw_df)
-            accuracy, tot_ret, num_simulations, prof_factor = run_backtest_simulations(tech_df)
-            latest = tech_df.iloc[-1]
             
-            score = 0
-            if latest['EMA_10'] > latest['EMA_50']: score += 30
-            if latest['MACD'] > latest['MACD_Signal']: score += 25
-            if 40 <= latest['RSI'] <= 70: score += 25
-            if latest['Close'] > latest['BB_Mid']: score += 20
-            
-            signal = "STRONG BUY" if score >= 75 else "BUY" if score >= 55 else "NEUTRAL" if score >= 40 else "SELL"
-            
-            metrics_dict = {
-                "Asset Name": name,
-                "Symbol": symbol,
-                "LTP (₹)": round(latest['Close'], 2),
-                "Signal": signal,
-                "Tactical Score": score,
-                "RSI (14)": round(latest['RSI'], 1),
-                "Simulations Count": num_simulations,
-                "Win Accuracy (%)": accuracy,
-                "Total Return (%)": tot_ret,
-                "Profit Factor": prof_factor
-            }
-            
-            table_data.append(metrics_dict)
-            asset_cache[name] = {
-                "tech_df": tech_df,
-                "metrics": metrics_dict
-            }
+            if not tech_df.empty:
+                accuracy, tot_ret, num_simulations, prof_factor = run_backtest_simulations(tech_df)
+                latest = tech_df.iloc[-1]
+                
+                score = 0
+                if latest['EMA_10'] > latest['EMA_50']: score += 30
+                if latest['MACD'] > latest['MACD_Signal']: score += 25
+                if 40 <= latest['RSI'] <= 70: score += 25
+                if latest['Close'] > latest['BB_Mid']: score += 20
+                
+                signal = "STRONG BUY" if score >= 75 else "BUY" if score >= 55 else "NEUTRAL" if score >= 40 else "SELL"
+                
+                metrics_dict = {
+                    "Asset Name": name,
+                    "Symbol": symbol,
+                    "LTP (₹)": round(latest['Close'], 2),
+                    "Signal": signal,
+                    "Tactical Score": score,
+                    "RSI (14)": round(latest['RSI'], 1),
+                    "Simulations Count": num_simulations,
+                    "Win Accuracy (%)": accuracy,
+                    "Total Return (%)": tot_ret,
+                    "Profit Factor": prof_factor
+                }
+                
+                table_data.append(metrics_dict)
+                asset_cache[name] = {
+                    "tech_df": tech_df,
+                    "metrics": metrics_dict
+                }
 
-scanner_df = pd.DataFrame(table_data)
+if table_data:
+    scanner_df = pd.DataFrame(table_data)
 
-st.markdown("### 🛰️ NIFTY 50 MULTI-ASSET SCANNER")
-st.dataframe(
-    scanner_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-        "Win Accuracy (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
-        "Total Return (%)": st.column_config.NumberColumn(format="%.1f%%"),
-        "Profit Factor": st.column_config.NumberColumn(format="%.2f"),
-        "Tactical Score": st.column_config.NumberColumn(format="%d / 100")
-    }
-)
+    st.markdown("### 🛰️ NIFTY 50 MULTI-ASSET SCANNER")
+    st.dataframe(
+        scanner_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            "Win Accuracy (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+            "Total Return (%)": st.column_config.NumberColumn(format="%.1f%%"),
+            "Profit Factor": st.column_config.NumberColumn(format="%.2f"),
+            "Tactical Score": st.column_config.NumberColumn(format="%d / 100")
+        }
+    )
+else:
+    st.warning("⚠️ No valid data retrieved for the selected assets. Yahoo Finance API may be temporarily down.")
 
 st.markdown('<div class="hud-line"></div>', unsafe_allow_html=True)
 
@@ -359,8 +364,14 @@ if selected_asset_name in asset_cache:
     m = cached_asset["metrics"]
 else:
     symbol = NIFTY_50_CATALOG[selected_asset_name]
-    raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
-    df_tech = compute_technical_indicators(raw_df)
+    with st.spinner(f"Fetching localized data for {selected_asset_name}..."):
+        raw_df = fetch_stock_data(symbol, period=DEFAULT_HORIZON)
+        df_tech = compute_technical_indicators(raw_df)
+    
+    if df_tech.empty:
+        st.warning(f"⚠️ Market data feed for **{selected_asset_name}** ({symbol}) is currently unavailable. Please select another stock.")
+        st.stop()
+
     accuracy, tot_ret, num_simulations, prof_factor = run_backtest_simulations(df_tech)
     latest = df_tech.iloc[-1]
     
